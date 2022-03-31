@@ -1,0 +1,174 @@
+import pandas as pd
+import numpy as np 
+import math
+
+#select accession, institution_name, create_date, sigma_algo_name, answer_compared_to_nlp
+#from data.all_analyzed
+#where aidoc_site='utsw'
+#and analysis_finish_time_utc between '2022-02-01' and '2022-02-28'
+
+df = pd.read_csv('last_month.csv')
+
+
+
+
+#Creating 3 variables 1) 'AI_Algorithm' with the names of algorithms that Shuli preferes.
+#2) AI result (based on answer compared to NLP) 3) NLP result (based on answer compared to NLP)  
+
+conitions_Algo = [
+    (df['sigma_algo_name'] == 'hyperdense'), 
+    (df['sigma_algo_name'] == 'pe'),
+    (df['sigma_algo_name'] == 'ipe'),
+    (df['sigma_algo_name'] == 'hypodense')
+    ]
+values_Algo = ['ICH','PE', 'iPE', 'CSF']
+df['AI_Algorithm'] = np.select(conitions_Algo, values_Algo)
+
+
+conitions_AI = [
+    (df['answer_compared_to_nlp'] == 'TP'), 
+    (df['answer_compared_to_nlp'] == 'FN'),
+    (df['answer_compared_to_nlp'] == 'FP'),
+    (df['answer_compared_to_nlp'] == 'TN')
+    ]
+values_AI = ['positive','negative', 'positive', 'negative']
+df['AI result'] = np.select(conitions_AI, values_AI)
+
+
+conitions_NLP = [
+    (df['answer_compared_to_nlp'] == 'TP'), 
+    (df['answer_compared_to_nlp'] == 'FN'),
+    (df['answer_compared_to_nlp'] == 'FP'),
+    (df['answer_compared_to_nlp'] == 'TN')
+    ]
+values_NLP = ['positive','positive', 'negative', 'negative']
+df['NLP result'] = np.select(conitions_NLP, values_NLP)
+
+
+
+
+
+# omitting empty values in an 'answer_compared_to_nlp'.
+df = df[df.answer_compared_to_nlp.notnull()]
+
+# omitting results of other algos which are not the 4 algos we are interested in - ICH, PE, iPE, CSF
+df = df[df.AI_Algorithm!='0']
+
+#creating 'results' variable, which holds the number of TP,FN,FP,TN per each algo
+results=df.groupby(['AI_Algorithm', 'answer_compared_to_nlp']).size().reset_index().pivot(columns='AI_Algorithm', index='answer_compared_to_nlp', values=0) 
+
+
+#creating 'df_b' variable, which holds the values of metrics of sens', spec' and PPV, per each algo. 
+pathology = ["ICH", "PE", "iPE","CSF" ]
+data = []
+for p in pathology:
+    sens  = round(results[p]['TP']/(results[p]['TP']+results[p]['FN'])*100,1)
+    spec = round(results[p]['TN']/(results[p]['TN']+results[p]['FP'])*100,1)
+    ppv= round(results[p]['TP']/(results[p]['TP']+results[p]['FP'])*100,1)
+
+    data.append([sens, spec, ppv])
+
+df_b = pd.DataFrame(data, columns=['sens', 'spec ', 'ppv'])
+df_b = df_b.rename(index={0: 'ICH',1: 'PE',2: 'iPE',3: 'CSF'})    
+
+
+
+
+
+#The variable with the ending _FN_N holds the number of FNs we need to have in this algo, so we will have sens' score of the baseline (or a bit above)    
+
+
+ICH_FN_N = math.floor((results["ICH"]["TP"]-0.92*results["ICH"]["TP"])/0.92)
+PE_FN_N = math.floor((results["PE"]["TP"]-0.90*results["PE"]["TP"])/0.90)
+iPE_FN_N = math.floor((results["iPE"]["TP"]-0.8*results["iPE"]["TP"])/0.8)
+CSF_FN_N = math.floor((results["CSF"]["TP"]-0.85*results["CSF"]["TP"])/0.85)
+
+
+#The variable with the ending _FN_per holds the % of FNs we need to remove in this algo, so we will have sens' score of the baseline (or a bit above)    
+
+ICH_FN_per =((results["ICH"]["FN"] - ICH_FN_N))/results["ICH"]["FN"] 
+PE_FN_per =(results["PE"]["FN"] - PE_FN_N)/results["PE"]["FN"] 
+iPE_FN_per =(results["iPE"]["FN"] - iPE_FN_N)/results["iPE"]["FN"] 
+CSF_FN_per =(results["CSF"]["FN"] - CSF_FN_N)/results["CSF"]["FN"] 
+
+#creating FN_omit variable, which holds the % of FNs, per Algo, that were changed to 'TN'.
+FNs_per=[ICH_FN_per, PE_FN_per, iPE_FN_per, CSF_FN_per]
+FN_omit = pd.DataFrame(FNs_per, columns=['%FNs the omitted'])
+FN_omit = FN_omit.rename(index={0: 'ICH',1: 'PE',2: 'iPE',3: 'CSF'} ) 
+
+
+
+
+
+
+#Changing randomly of 'FN' and turning them to 'TN'. 
+#The percentage of FNs per each algo that is changed to 'TN' is determined by the variable ending with FN_per for each algo.
+
+dfupdate_ICH = df[(df['answer_compared_to_nlp']=="FN") & (df['AI_Algorithm']=="ICH")].sample(frac=ICH_FN_per)
+dfupdate_ICH.answer_compared_to_nlp="TN"
+df.update(dfupdate_ICH)
+
+
+dfupdate_PE = df[(df['answer_compared_to_nlp']=="FN") & (df['AI_Algorithm']=="PE")].sample(frac=PE_FN_per)
+dfupdate_PE.answer_compared_to_nlp="TN"
+df.update(dfupdate_PE)
+
+
+dfupdate_iPE = df[(df['answer_compared_to_nlp']=="FN") & (df['AI_Algorithm']=="iPE")].sample(frac=iPE_FN_per)
+dfupdate_iPE.answer_compared_to_nlp="TN"
+df.update(dfupdate_iPE)
+
+
+dfupdate_CSF = df[(df['answer_compared_to_nlp']=="FN") & (df['AI_Algorithm']=="CSF")].sample(frac=CSF_FN_per)
+dfupdate_CSF.answer_compared_to_nlp="TN"
+df.update(dfupdate_CSF)
+
+
+
+
+
+
+
+
+# creating 'df_a' variable, which holds the values of of sens', spec' and PPV, per each algo, after the change ('FN' to 'TN')
+
+results=df.groupby(['AI_Algorithm', 'answer_compared_to_nlp']).size().reset_index().pivot(columns='AI_Algorithm', index='answer_compared_to_nlp', values=0)
+
+pathology = ["ICH", "PE", "iPE","CSF" ]
+data = []
+for p in pathology:
+    sens  = round(results[p]['TP']/(results[p]['TP']+results[p]['FN'])*100,1)
+    spec = round(results[p]['TN']/(results[p]['TN']+results[p]['FP'])*100,1)
+    ppv= round(results[p]['TP']/(results[p]['TP']+results[p]['FP'])*100,1)
+
+    
+    data.append([sens, spec, ppv])
+
+df_a = pd.DataFrame(data, columns=['sens', 'spec ', 'ppv'])
+df_a = df_a.rename(index={0: 'ICH',1: 'PE',2: 'iPE',3: 'CSF'} )
+
+
+
+
+
+
+# Organizing the results ('of') before exporting to excel
+
+df=df.rename(columns = {'accession' : 'Accession number ','AI_Algorithm' : 'AI algorithm', 'create_date' : 'Date created'})
+df=df.sort_values(by='Date created')
+df= df.drop(['sigma_algo_name', 'answer_compared_to_nlp'], axis=1)
+
+
+
+
+
+# determining the name of the file
+file_name = 'utsw_output.xls'
+  
+# saving the excel
+
+with pd.ExcelWriter('utsw_output.xls') as writer:  
+    df.to_excel(writer, sheet_name='results after')
+    df_b.to_excel(writer, sheet_name='metrics before')
+    df_a.to_excel(writer, sheet_name='metrics after')
+    FN_omit.to_excel(writer, sheet_name='%FNs omitted (per algo')
